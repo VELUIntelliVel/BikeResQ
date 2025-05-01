@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Mechanic Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Leaflet & Socket.io -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Leaflet Control Geocoder -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css"/>
+    <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+    <style>
+        * {box-sizing: border-box;}
+        body {margin: 0;font-family: Arial, sans-serif;text-align: center;background: #f5f5f5;}
+        h2 {margin: 10px 0;font-size: 1.5rem;}
+        #map {height: 60vh;width: 95%;max-width: 1000px;margin: 10px auto;border: 2px solid #ccc;border-radius: 10px;}
+        #requestPopup {background: white;padding: 20px;border-radius: 10px;box-shadow: 0 0 10px rgba(0,0,0,0.2);max-width: 90%;width: 300px;margin: 10px auto;display: none;}
+        #requestPopup p {margin-bottom: 10px;font-size: 1rem;}
+        #requestPopup button {padding: 10px 20px;margin: 5px;border: none;background: #007BFF;color: white;border-radius: 5px;font-size: 0.95rem;cursor: pointer;}
+        #requestPopup button:nth-child(3) {background: #dc3545;}
+        #chat-icon {position: fixed;bottom: 20px;right: 20px;width: 50px;height: 50px;background-color: #25D366;color: white;font-size: 24px;text-align: center;line-height: 50px;border-radius: 50%;box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.3);cursor: grab;z-index: 10000;user-select: none;}
+        #chat-box-container {position: fixed;bottom: 80px;right: 20px;width: 95%;max-width: 350px;height: 500px;background: white;border-radius: 10px;box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);overflow: hidden;z-index: 9999;display: none;}
+        iframe {width: 100%;height: 100%;border: none;}
+        #currentJobPanel {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f7f7f7;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        #historyIcon {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background-color: #fff;
+            border-radius: 50%;
+            padding: 10px;
+            font-size: 22px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            cursor: pointer;
+        }
+        #historyPopup {
+            position: fixed;
+            bottom: 70px;
+            left: 20px;
+            background: #fff;
+            width: 250px;
+            max-height: 300px;
+            overflow-y: auto;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+            display: none;
+            padding: 10px;
+        }
+        #historyPopup h4 {
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+        .history-entry {
+            border-bottom: 1px solid #ccc;
+            padding: 6px 0;
+          }
+        @media (max-width: 600px) {
+            #requestPopup {width: 90%;font-size: 0.9rem;}
+            #requestPopup button {font-size: 0.85rem;padding: 8px 15px;}
+            #chat-box-container {width: 90%;height: 60%;bottom: 70px;}
+            #map { height: 50vh;}
+        }
+    </style>
+</head>
+<body>
+    <h2>👨‍🔧 Mechanic Dashboard</h2>
+    <!-- HTML: Positioning the search button on the map -->
+    <div id="map"></div>
+    <div id="requestPopup" style="display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:white; padding:20px; border:1px solid black; z-index:9999;">
+        <p id="popupText"></p>
+        <button onclick="respondRequest(true)">Accept</button>
+        <button onclick="respondRequest(false)">Decline</button>
+    </div>    
+    <div id="currentJobPanel" style="margin-top: 10px; padding: 15px; background: #f9f9f9; border-radius: 10px;">
+        <h3>🔧 Current Job</h3>
+        <p><strong>User:</strong> <span id="jobUser">--</span></p>
+        <p><strong>Location:</strong> <span id="jobLocation">--</span></p>
+        <p><strong>Issue:</strong> <span id="jobIssue">--</span></p>
+        <p><strong>phone no:</strong> <span id="jobphone">--</span></p>
+        <button id="completeBtn" style="padding: 8px 16px; background-color: green; color: white; border: none; border-radius: 6px;">✅ Mark as Completed</button>
+    </div>
+      <!-- History Icon + Panel -->
+    <div id="historyPanel" style="display: none; margin-top: 20px;">
+        <h3>🕘 Job History</h3>
+        <ul id="historyList" style="list-style: none; padding: 0;"></ul>
+    </div>
+      <!-- History toggle icon -->
+    <button id="toggleHistory" style="position: fixed; bottom: 20px; left: 20px; padding: 10px; border-radius: 50%; background-color: #333; color: white; font-size: 20px;">📜</button>
+    <div id="chat-icon">💬</div>
+    <div id="chat-box-container">
+        <iframe src="http://127.0.0.1:5000/chat"></iframe>
+    </div>
+    <script>
+        const socket = io.connect("http://127.0.0.1:5000");
+        const mechanicId = "{{ mechanic_id }}";  // Jinja2 will replace it
+        const mechanicName = "{{ mechanic_name }}";
+        const mechanicPhone = "{{ mechanic_phone }}";
+        const mechanicShopName = "{{ mechanic_shop_name }}";
+        console.log("Mechanic ID:", mechanicId);
+        console.log("Mechanic NAME:", mechanicName);
+        console.log("Mechanic PHONE:", mechanicPhone);
+        console.log("Mechanic SHOPNAME:", mechanicShopName);
+        let lat = 13.0827; // initial latitude
+        let lng = 80.2707; // initial longitude
+        let userMarker;
+        let mechanicRoute = null;
+        // Initialize the map
+        const map = L.map('map').setView([lat, lng], 13);
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+        // Add a draggable marker
+        // Create a mechanic marker on the mechanic dashboard
+        let mechanicMarker = L.marker([lat, lng], { draggable: true })
+        .addTo(map)
+        .bindPopup("Your Location")
+        .openPopup();
+        // Emit updated location on drag end
+        mechanicMarker.on("dragend", function (e) {
+        const pos = e.target.getLatLng();
+        lat = pos.lat;
+        lng = pos.lng;
+        console.log("🔁 Mechanic dragged to:", lat, lng);
+        // Emit to server to update user side
+        socket.emit("mechanic_location_update", {
+        lat: lat,
+        lng: lng,
+        mechanic_id: mechanicId,  // replace with actual mechanic ID
+        user_id: currentUserId    // replace with actual connected user ID
+        });
+        });
+        // Add Search Control
+        const geocoder = L.Control.geocoder({
+        defaultMarkGeocode: false
+        })
+        .on('markgeocode', function(e) {
+        const center = e.geocode.center;
+        map.setView(center, 15); // Zoom to searched location
+        userMarker.setLatLng(center); // Move marker
+        lat = center.lat;
+        lng = center.lng;
+        userMarker.bindPopup(e.geocode.name).openPopup();
+        })
+        .addTo(map);
+        socket.on('connect', function() {
+            console.log('Mechanic connected with socket ID:', socket.id);
+        });
+        let currentJobUserId = null; 
+        socket.on("new_user_request", (data) => {
+            currentJobUserId = data.user_id;  // ✅ Now this will work
+            const userAddress = data.address;  // The address from the server
+            const issue = data.issue;          // The issue description
+            const name = data.name;            // The user's name
+            const phone = data.phone;          // The user's phone number
+            // Display user information on the mechanic's dashboard in the current job panel
+            document.getElementById("jobUser").innerText = name;
+            document.getElementById("jobLocation").innerText = userAddress;  // Display the readable address
+            document.getElementById("jobIssue").innerText = issue;
+            document.getElementById("jobphone").innerText = phone;
+            // Optionally log to the console for debugging
+            console.log(`New request from: ${name}, Phone: ${phone}, Location: ${userAddress}, Issue: ${issue}, ID:${currentJobUserId}`);
+            // Display the popup with the details
+            showMechanicPopup(data);
+        });
+        function showMechanicPopup(data) {
+            // Get the popup element
+            const popup = document.getElementById('requestPopup');
+            // Set the content of the popup
+            document.getElementById('popupText').innerHTML = `
+                User ${data.name} needs help at: <br>${data.address}<br>Phone: ${data.phone}`;
+            // Store target user socket id to respond later
+            targetUserSid = data.user_sid;  // You must get this from the server when sending the request to mechanic
+            // Show the popup
+            popup.style.display = 'block';
+        }         
+        function respondRequest(isAccepted) {
+            if (isAccepted) {
+                socket.emit('mechanic_response', {
+                    accepted: true,   // or false
+                    user_sid: targetUserSid,   // very important!
+                    mechanic_name: mechanicName,  // if accepted
+                    shop_name: mechanicShopName,  // if accepted
+                    phone: mechanicPhone,          // if accepted
+                    latitude: lat,     // use lat (global variable)
+                    longitude: lng,
+                    mechanic_id: mechanicId,  // replace with actual mechanic ID
+                });            
+            } else {
+                socket.emit("mechanic_response", { accepted: false });
+            }
+            // Hide the popup after responding
+            closePopup();
+        }
+        function closePopup() {
+            let popup = document.getElementById('requestPopup');
+            if (popup) {
+                popup.style.display = 'none'; // Hide the popup instead of removing it
+            }
+        }
+        let routingControlMechanic;
+        socket.on("start_navigation", (data) => {
+            console.log("Navigation started:", data);
+            const userLat = data.user_lat;
+            const userLng = data.user_lng;
+            if (!userMarker) {
+                userMarker = L.marker([userLat, userLng], {icon: L.icon({
+                    iconUrl: 'https://cdn-icons-png.flaticon.com/512/149/149059.png',
+                    iconSize: [40, 40],
+                })}).addTo(map).bindPopup("User Location").openPopup();
+            }
+            if (routingControlMechanic) {
+                map.removeControl(routingControlMechanic);
+            }
+            if (userLat !== undefined && userLng !== undefined && lat !== undefined && lng !== undefined) {
+                routingControlMechanic = L.Routing.control({
+                    waypoints: [
+                        L.latLng(lat, lng),
+                        L.latLng(userLat, userLng)
+                    ],
+                    routeWhileDragging: false,
+                    router: L.Routing.osrmv1({
+                        serviceUrl: 'https://router.project-osrm.org/route/v1'
+                    }),
+                }).addTo(map);                
+            } else {
+                console.error("Cannot start routing: Missing user or mechanic location.");
+            }
+        });
+        function stopRoutingMechanic() {
+            console.log("Mechanic-side routing stopped.");
+            if (routingControlMechanic) {
+                map.removeControl(routingControlMechanic);
+                routingControlMechanic = null;
+            }
+            if (userMarker) {
+                map.removeLayer(userMarker);
+                userMarker = null;
+            }
+        }
+        socket.on("stop-routing", () => {
+            // Clear mechanic-side route if needed
+            stopRoutingMechanic(); // Define this function if not done yet
+            alert("✅ Job completed. Routing stopped.");
+          });
+        
+        document.addEventListener("DOMContentLoaded", () => {
+            const toggleButton = document.getElementById("toggleHistory");
+            const historyPanel = document.getElementById("historyPanel");
+            toggleButton.addEventListener("click", () => {
+                if (historyPanel.style.display === "none" || historyPanel.style.display === "") {
+                    historyPanel.style.display = "block";
+                } else {
+                    historyPanel.style.display = "none";
+                }
+            });
+        });
+        document.getElementById("completeBtn").addEventListener("click", () => {
+            const name = document.getElementById("jobUser").innerText;
+            const location = document.getElementById("jobLocation").innerText;
+            const issue = document.getElementById("jobIssue").innerText;
+            const phone = document.getElementById("jobphone").innerText;
+            // You can replace the following with actual payment logic if needed
+            const payment = "Paid in Cash";  // Example entry
+            // Move job to history
+            const historyList = document.getElementById("historyList");
+            const li = document.createElement("li");
+            li.className = "history-entry";
+            li.innerHTML = `
+                <strong>User:</strong> ${name}<br>
+                <strong>Location:</strong> ${location}<br>
+                <strong>Issue:</strong> ${issue}<br>
+                <strong>Payment:</strong> ${payment}
+            `;
+            historyList.appendChild(li);
+            // Reset current job panel
+            document.getElementById("jobUser").innerText = "--";
+            document.getElementById("jobLocation").innerText = "--";
+            document.getElementById("jobIssue").innerText = "--";
+            document.getElementById("jobphone").innerText = "--";
+            // Stop routing on mechanic side
+            stopRoutingMechanic();
+            // Emit event to user to stop routing as well
+            socket.emit("job-completed", {
+                user_id: currentJobUserId,
+                mechanic_id: mechanicId,      // ← Make sure this variable is set globally
+                issue: issue,
+                location: location
+            });
+            
+        });                  
+       
+        const chatIcon = document.getElementById("chat-icon");
+        const chatBox = document.getElementById("chat-box-container");
+        let isDragging = false, offsetX, offsetY;
+        chatIcon.addEventListener("click", () => {
+            chatBox.style.display = (chatBox.style.display === "none") ? "block" : "none";
+        });
+        chatIcon.addEventListener("mousedown", (e) => {
+            isDragging = true;
+            offsetX = e.clientX - chatIcon.getBoundingClientRect().left;
+            offsetY = e.clientY - chatIcon.getBoundingClientRect().top;
+            chatIcon.style.cursor = "grabbing";
+        });
+        document.addEventListener("mousemove", (e) => {
+            if (!isDragging) return;
+            let x = e.clientX - offsetX;
+            let y = e.clientY - offsetY;
+            // Boundary check
+            x = Math.max(0, Math.min(window.innerWidth - 50, x));
+            y = Math.max(0, Math.min(window.innerHeight - 50, y));
+            chatIcon.style.left = x + "px";
+            chatIcon.style.top = y + "px";
+        });
+        document.addEventListener("mouseup", () => {
+            isDragging = false;
+            chatIcon.style.cursor = "grab";
+        });
+    </script>
+</body>
+</html>

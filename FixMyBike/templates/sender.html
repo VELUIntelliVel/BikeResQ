@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Bike Assistance Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css"/>
+  <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+  <style>
+    * {box-sizing: border-box;}
+    body {margin: 0;padding: 20px;font-family: Arial, sans-serif;background-color: #f1f1f1;text-align: center;}
+    h2 {font-size: 2rem;margin-bottom: 20px;}
+    button { padding: 10px 15px; font-size: 1rem;cursor: pointer;}
+    #payment-options button {
+      padding: 12px 20px;
+      font-size: 1rem;
+      margin: 10px;
+      cursor: pointer;
+      border: none;
+      border-radius: 5px;
+      background-color: #28a745;
+      color: white;
+    }
+  
+    #payment-options button:hover {
+      background-color: #218838;
+    }
+    #map {height: 60vh;width: 95%;max-width: 1000px;margin: 10px auto;border: 2px solid #ccc;border-radius: 10px;}
+    .status { font-size: 1.1rem; margin: 15px 0;}
+    .issue-buttons {display: flex;flex-wrap: wrap;gap: 10px;justify-content: center;}
+    .issue-buttons button {flex: 1 1 150px;max-width: 200px; padding: 10px; font-size: 1rem; border: 1px solid #ccc;cursor: pointer;}
+    textarea {width: 90%;max-width: 600px;height: 80px;margin: 15px auto;display: block;padding: 10px;font-size: 1rem;box-sizing: border-box;resize: vertical;}
+    .send-button {background-color: #007bff;color: white;border: none;margin-top: 10px;padding: 12px 20px;font-size: 1rem;cursor: pointer;}
+    #chat-icon {position: fixed;bottom: 20px;right: 20px;width: 50px;height: 50px;background-color: #25D366;color: white;font-size: 24px;text-align: center;line-height: 50px;border-radius: 50%;box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.3);cursor: grab;z-index: 10000;user-select: none;}
+    #chat-box-container {position: fixed;bottom: 80px;right: 20px;width: 95%;max-width: 350px;height: 500px;background: white;border-radius: 10px;box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);overflow: hidden;z-index: 9999;display: none;}
+    iframe {width: 100%;height: 100%;border: none;}
+    .issue-buttons button.active {
+      background-color: #007bff; /* or any highlight color */
+      color: white;
+      border: 2px solid #0056b3;
+    }    
+    @media screen and (max-width: 768px) {
+      .issue-buttons {flex-direction: column;align-items: center;}
+      .issue-buttons button {width: 100%;max-width: 300px;}
+      #map {height: 300px;}
+      #chat-box-container { width: 95%;right: 2.5%; height: 70vh;}
+    }
+  </style>
+</head>
+<body>
+    <h2>Bike Assistance Dashboard</h2>
+    <div id="map"></div>
+    <div class="status">Status: Searching for mechanic...</div>
+    <h3>Select Your Issue:</h3>
+    <div class="issue-buttons">
+        <button onclick="selectIssue(this, 'Puncture')">Puncture</button>
+        <button onclick="selectIssue(this, 'Engine Problem')">Engine Problem</button>
+        <button onclick="selectIssue(this, 'Battery Issue')">Battery Issue</button>
+      </div>
+      
+    <textarea id="otherIssue" placeholder="Other issue (optional)"></textarea>
+    <button class="send-button" onclick="sendRequest()">Send Request</button>
+    <div id="payment-options" style="display: block; margin-top: 20px;">
+      <h3>Select Payment Method</h3>
+      <button onclick="handleCashPayment()">💵 Pay with Cash</button>
+      <button onclick="redirectToGPay()">📱 Pay with GPay/UPI</button>
+    </div>
+    
+    
+    <div id="chat-icon">💬</div>
+    <!-- Chat Box Container -->
+    <div id="chat-box-container" style="display: none;">
+        <iframe src="http://127.0.0.1:5000/chat" width="100%" height="500px" style="border:none;"></iframe>
+    </div>
+   
+  <script>
+    const socket = io();
+    const userId = "user_" + Math.floor(Math.random() * 10000);
+    let map = L.map("map").setView([13.0827, 80.2707], 13);
+    let userMarker, mechanicMarker, routeControl;
+    let lat = 13.0827, lng = 80.2707;
+    let userLat = lat, userLng = lng;
+    let selectedIssue = "";
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+    // Add geocoder control (search bar)
+    L.Control.geocoder({
+      defaultMarkGeocode: false
+    })
+      .on("markgeocode", function (e) {
+        const center = e.geocode.center;
+        const bounds = e.geocode.bbox;
+        map.fitBounds([[bounds.getSouth(), bounds.getWest()], [bounds.getNorth(), bounds.getEast()]]);
+        // Move existing userMarker to searched location
+        userMarker.setLatLng(center);
+        userMarker.getPopup().setContent(e.geocode.name);
+        userMarker.openPopup();
+      })
+      .addTo(map);    
+    userMarker = L.marker([lat, lng], { draggable: true }).addTo(map).bindPopup("Your Location").openPopup();
+    userMarker.on("dragend", (e) => {
+      let pos = e.target.getLatLng();
+      lat = userLat = pos.lat;
+      lng = userLng = pos.lng;
+    });
+    function selectIssue(btn, issue) {
+      const isActive = btn.classList.contains("active");
+      // Clear all active buttons first
+      document.querySelectorAll(".issue-buttons button").forEach(b => b.classList.remove("active"));
+      if (!isActive) {
+        // If the clicked button was not active, activate it
+        btn.classList.add("active");
+        selectedIssue = issue;
+      } else {
+        // If it was already active, deactivate it
+        selectedIssue = null;
+      }
+    }
+    function getReadableAddress(lat, lng, callback) {
+      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`;
+      fetch(url)
+        .then(response => response.json())
+        .then(data => {
+          const address = data.display_name || `Lat: ${lat}, Lng: ${lng}`;
+          callback(address);
+        })
+        .catch(() => {
+          callback(`Lat: ${lat}, Lng: ${lng}`); // fallback
+        });
+    }    
+    function sendRequest() {
+      const otherText = document.getElementById("otherIssue").value.trim();
+      const finalIssue = otherText !== "" ? otherText : selectedIssue;
+      if (!finalIssue) {
+        alert("Please select or enter an issue.");
+        return;
+      }
+      getReadableAddress(lat, lng, function(address) {
+        socket.emit("user_request", {
+          user_id: userId,
+          lat: lat,
+          lng: lng,
+          issue: finalIssue,
+          address: address  // send readable address too
+        });
+      });
+      alert("Request sent!");
+    }
+    function trackUserLocation() {
+      setInterval(() => {
+        if (isTrackingStarted) {
+          socket.emit("live_location", {
+            lat: userLat,
+            lng: userLng,
+            userType: "user"
+          });
+        }
+      }, 1000);
+    }
+    let isTrackingStarted = false;
+    socket.on("mechanic_decision", (data) => {
+      alert(data.accepted ? "Mechanic accepted your request!" : "Mechanic rejected your request.");
+    });
+    socket.on("request_accepted", () => {
+      isTrackingStarted = true;
+      trackUserLocation();
+    });
+    socket.on("live_location", (data) => {
+      if (!isTrackingStarted || data.userType !== "mechanic") return;
+      if (!mechanicMarker) {
+        mechanicMarker = L.marker([data.lat, data.lng], { color: "red" }).addTo(map);
+      } else {
+        mechanicMarker.setLatLng([data.lat, data.lng]);
+      }
+      drawRoute([userLat, userLng], [data.lat, data.lng]);
+
+      const distance = getDistance(userLat, userLng, data.lat, data.lng);
+      const eta = Math.round((distance / 40) * 60);
+      console.log("ETA:", eta, "min, Distance:", distance, "km");
+      if (distance <= 0.2) { // ~2 meters
+        alert("Mechanic has arrived at your location.");
+        isTrackingStarted = false;
+        if (routeControl) {
+          map.removeControl(routeControl);
+        }
+        // Show payment options
+        showPaymentOptions();
+      }
+    });
+    function drawRoute(startCoords, endCoords) {
+      if (!startCoords[0] || !startCoords[1]) return;
+      if (routeControl) {
+        map.removeControl(routeControl);
+      }
+      routeControl = L.Routing.control({
+        waypoints: [
+          L.latLng(startCoords[0], startCoords[1]),
+          L.latLng(endCoords[0], endCoords[1])
+        ],
+        routeWhileDragging: false
+      }).addTo(map);
+    }
+    function getDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 +
+        Math.cos(lat1 * Math.PI / 180) *
+        Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) ** 2;
+      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+    }
+    function showPaymentOptions() {
+      document.getElementById("payment-options").style.display = "block";
+    }
+  
+    function handleCashPayment() {
+      alert("Please hand over the cash to the mechanic. Thank you!");
+      document.getElementById("payment-options").style.display = "none";
+    }
+  
+    function redirectToGPay() {
+      const upiUrl = "upi://pay?pa=yourupiid@bank&pn=BikeResQ&am=100&cu=INR";
+      window.location.href = upiUrl;
+    }
+    const chatIcon = document.getElementById("chat-icon");
+    const chatBox = document.getElementById("chat-box-container");
+    let isDragging = false, offsetX, offsetY;
+    chatIcon.addEventListener("click", () => {
+        chatBox.style.display = (chatBox.style.display === "none") ? "block" : "none";
+    });
+    chatIcon.addEventListener("mousedown", (e) => {
+        isDragging = true;
+        offsetX = e.clientX - chatIcon.getBoundingClientRect().left;
+        offsetY = e.clientY - chatIcon.getBoundingClientRect().top;
+        chatIcon.style.cursor = "grabbing";
+    });
+    document.addEventListener("mousemove", (e) => {
+        if (!isDragging) return;
+        let x = e.clientX - offsetX;
+        let y = e.clientY - offsetY;
+        chatIcon.style.left = x + "px";
+        chatIcon.style.top = y + "px";
+    });
+    document.addEventListener("mouseup", () => {
+        isDragging = false;
+        chatIcon.style.cursor = "grab";
+    });
+  </script>
+</body>
+</html>

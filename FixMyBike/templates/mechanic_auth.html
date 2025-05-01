@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mechanic Authentication</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            font-family: Arial, sans-serif;
+        }
+        .flip-container {
+            width: 300px;
+            height: 500px;
+            perspective: 1000px;
+        }
+        .flipper {
+            width: 100%;
+            height: 100%;
+            transition: transform 0.6s;
+            transform-style: preserve-3d;
+        }
+        .flipped .flipper {
+            transform: rotateY(180deg);
+        }
+        .card {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            backface-visibility: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            border: 1px solid #ccc;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            background: #fff;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .back {
+            transform: rotateY(180deg);
+        }
+        button {
+            margin-top: 10px;
+            padding: 10px 20px;
+            border: none;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        input {
+            margin-bottom: 10px;
+            padding: 8px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .button-container {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="flip-container" id="flipCard">
+        <div class="flipper">
+            <!-- Mechanic Login Page -->
+            <div class="card front">
+                <h2>Mechanic Login</h2>
+                <input type="email" id="login-email" placeholder="Email" required><br>
+                <input type="password" id="login-password" placeholder="Password" required><br>
+                <div class="button-container">
+                    <button onclick="loginMechanic()">Login</button>
+                    <button onclick="flip()">Sign Up</button>
+                </div>
+            </div>
+            <!-- Mechanic Signup Page -->
+            <div class="card back">
+                <h2>Mechanic Sign Up</h2>
+                <input type="text" id="signup-name" placeholder="Full Name" required><br>
+                <input type="email" id="signup-email" placeholder="Email" required><br>
+                <input type="password" id="signup-password" placeholder="Password" required><br>
+                <input type="text" id="signup-phone" placeholder="Phone Number" required><br>
+                <input type="text" id="signup-shop-name" placeholder="Shop Name" required><br>
+                <input type="text" id="signup-shop-location" placeholder="Shop Location" required><br>
+                <input type="text" id="signup-shop-license" placeholder="Shop License Number"><br>
+                <input type="text" id="signup-gstin" placeholder="GSTIN Number"><br>
+                <div class="button-container">
+                    <button onclick="registerMechanic()">Register</button>
+                    <button onclick="flip()">Back to Login</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script>
+        function flip() {
+            document.getElementById('flipCard').classList.toggle('flipped');
+        }
+        async function loginMechanic() {
+            let email = document.getElementById("login-email").value;
+            let password = document.getElementById("login-password").value;
+
+            let response = await fetch('/mechanic-login', {
+                method: "POST",
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({email, password})
+            });
+
+            let result = await response.json();
+            alert(result.message);
+            if (result.success) window.location.href = result.redirect;
+        }
+
+        async function registerMechanic() {
+            try {
+                let data = {
+                    full_name: document.getElementById("signup-name").value,
+                    email: document.getElementById("signup-email").value,
+                    password: document.getElementById("signup-password").value,
+                    phone: document.getElementById("signup-phone").value,
+                    shop_name: document.getElementById("signup-shop-name").value,
+                    shop_location: document.getElementById("signup-shop-location").value,
+                    shop_license: document.getElementById("signup-shop-license").value,
+                    gstin: document.getElementById("signup-gstin").value
+                };
+        
+                let response = await fetch('/mechanic-signup', {
+                    method: "POST",
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+        
+                if (!response.ok) {
+                    alert("Something went wrong! Please try again.");
+                    return;
+                }
+        
+                let result = await response.json();
+                alert(result.message);
+                if (result.success) {
+                    window.location.href = "/mechanic-dashboard";
+                }
+        
+            } catch (error) {
+                console.error("Error:", error);
+                alert("Failed to register. Please check your connection and try again.");
+            }
+        }
+    </script>
+</body>
+</html>

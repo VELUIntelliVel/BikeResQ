@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Bike Assistance Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css"/>
+  <script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+  <style>
+    * {box-sizing: border-box;}
+    body {margin: 0;padding: 20px;font-family: Arial, sans-serif;background-color: #f1f1f1;text-align: center;}
+    h2 {font-size: 2rem;margin-bottom: 20px;}
+    button { padding: 10px 15px; font-size: 1rem;cursor: pointer;}
+    #payment-options button {
+      padding: 12px 20px;
+      font-size: 1rem;
+      margin: 10px;
+      cursor: pointer;
+      border: none;
+      border-radius: 5px;
+      background-color: #28a745;
+      color: white;
+    }
+    #payment-options button:hover {
+      background-color: #218838;
+    }
+    #map {height: 60vh;width: 95%;max-width: 1000px;margin: 10px auto;border: 2px solid #ccc;border-radius: 10px;}
+    .status { font-size: 1.1rem; margin: 15px 0;}
+    .issue-buttons {display: flex;flex-wrap: wrap;gap: 10px;justify-content: center;}
+    .issue-buttons button {flex: 1 1 150px;max-width: 200px; padding: 10px; font-size: 1rem; border: 1px solid #ccc;cursor: pointer;}
+    textarea {width: 90%;max-width: 600px;height: 80px;margin: 15px auto;display: block;padding: 10px;font-size: 1rem;box-sizing: border-box;resize: vertical;}
+    .send-button {background-color: #007bff;color: white;border: none;margin-top: 10px;padding: 12px 20px;font-size: 1rem;cursor: pointer;}
+    #chat-icon {position: fixed;bottom: 20px;right: 20px;width: 50px;height: 50px;background-color: #25D366;color: white;font-size: 24px;text-align: center;line-height: 50px;border-radius: 50%;box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.3);cursor: grab;z-index: 10000;user-select: none;}
+    #chat-box-container {position: fixed;bottom: 80px;right: 20px;width: 95%;max-width: 350px;height: 500px;background: white;border-radius: 10px;box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);overflow: hidden;z-index: 9999;display: none;}
+    iframe {width: 100%;height: 100%;border: none;}
+    .issue-buttons button.active {
+      background-color: #007bff; /* or any highlight color */
+      color: white;
+      border: 2px solid #0056b3;
+    }    
+    @media screen and (max-width: 768px) {
+      #map {height: 300px;}
+      #chat-box-container { width: 95%;right: 2.5%; height: 70vh;}
+    }
+  </style>
+</head>
+<body>
+    <h2>Bike Assistance Dashboard</h2>
+    <div id="map"></div>
+    <div class="status">Status: Searching for mechanic...</div>
+    <h3>Select Your Issue:</h3>
+    <div class="issue-buttons">
+      <button onclick="selectIssue(this, 'Puncture')">Puncture</button>
+      <button onclick="selectIssue(this, 'Engine Problem')">Engine Problem</button>
+      <button onclick="selectIssue(this, 'Battery Issue')">Battery Issue</button>
+    </div>
+    <textarea id="otherIssue" placeholder="Other issue (optional)"></textarea>
+    <button class="send-button" onclick="sendRequest()">Send Request</button>
+    <div id="payment-options" style="display: block; margin-top: 20px;">
+      <h3>Select Payment Method</h3>
+      <button onclick="handleCashPayment()">💵 Pay with Cash</button>
+      <button onclick="redirectToGPay()">📱 Pay with GPay/UPI</button>
+    </div>
+    <!-- Current Service Info -->
+    <!-- Current Service Info -->
+    <div id="userCurrentJob" style="margin-top: 15px; padding: 15px; background: #f0f8ff; border-radius: 10px;">
+      <h3>🛠️ Current Service</h3>
+      <p><strong>Mechanic Name:</strong> <span id="currentMechanic">--</span></p>
+      <p><strong>Shop Name:</strong> <span id="currentShop">--</span></p>
+      <p><strong>Phone No:</strong> <span id="currentPhone">--</span></p>
+    </div>
+    <!-- Service History Panel -->
+    <div id="userHistoryPanel" style="display: none; margin-top: 15px;">
+      <h3>📜 Service History</h3>
+      <ul id="userHistoryList" style="list-style-type: none; padding: 0;"></ul>
+    </div>
+    <!-- Toggle History Button -->
+    <button id="userHistoryToggle" style="position: fixed; bottom: 20px; left: 20px; border-radius: 50%; padding: 12px; background: #222; color: white; font-size: 20px;">📅</button>
+    <div id="chat-icon">💬</div>
+    <!-- Chat Box Container -->
+    <div id="chat-box-container" style="display: none;">
+        <iframe src="http://127.0.0.1:5000/chat" width="100%" height="500px" style="border:none;"></iframe>
+    </div>
+  <script>
+    const socket = io.connect("http://127.0.0.1:5000"); 
+    const userId = "{{ user_id }}";  // Jinja2 will replace it with actual ID
+    const userName = "{{ user_name }}";
+    const userPhone = "{{ user_phone }}";
+    console.log("User ID:", userId);
+    console.log("User NAME:", userName);
+    console.log("User PHONE:", userPhone);
+    let lat = 13.0827; // initial latitude
+    let lng = 80.2707; // initial longitude
+    let userMarker;
+    let radarCircle = null;
+    let radarAnimationInterval = null;
+    let userLat, userLng; // Declare variables to store the user's latitude and longitude
+    let userAddress;
+    // Initialize the map
+    const map = L.map('map').setView([lat, lng], 13);
+    // Add OpenStreetMap tiles
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    // Add a draggable marker
+    userMarker = L.marker([lat, lng], { draggable: true })
+      .addTo(map)
+      .bindPopup("Your Location")
+      .openPopup();
+    // Update lat/lng when marker is dragged
+    userMarker.on("dragend", function(e) {
+      let pos = e.target.getLatLng();
+      lat = pos.lat;
+      lng = pos.lng;
+      userLat = lat;  // ✅ update userLat
+      userLng = lng;  // ✅ update userLng
+      console.log("Marker dragged to: ", userLat, userLng);
+    });
+    // Add Search Control
+    const geocoder = L.Control.geocoder({
+      defaultMarkGeocode: false
+    })
+    .on('markgeocode', function(e) {
+      const center = e.geocode.center;
+      map.setView(center, 15); // Zoom to searched location
+      userMarker.setLatLng(center); // Move marker
+      lat = center.lat;
+      lng = center.lng;
+      userLat = lat;  // ✅ update userLat
+      userLng = lng;  // ✅ update userLng
+      userMarker.bindPopup(e.geocode.name).openPopup();
+    })
+    .addTo(map);
+    socket.on("connect", () => {
+      console.log("✅ Connected as", socket.id);
+      socket.emit("register-user", { user_id:  userId });
+    });  
+    let selectedIssue = null; // store the selected issue
+    function selectIssue(button, issue) {
+    if (selectedIssue === issue) {
+        // Unselect if already selected
+        button.style.backgroundColor = ""; // Reset color
+        selectedIssue = null;
+    } else {
+        // Remove blue from all buttons
+        document.querySelectorAll(".issue-buttons button").forEach(btn => {
+        btn.style.backgroundColor = "";
+        });
+        // Set blue on selected
+        button.style.backgroundColor = "blue";
+        button.style.color = "white";
+        selectedIssue = issue;
+    }}
+    function getUserLocation(callback) {
+      if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(function(position) {
+              userLat = position.coords.latitude;
+              userLng = position.coords.longitude;
+              // Convert to readable address before proceeding
+              getReadableAddress(userLat, userLng, function(address) {
+                  userAddress = address;
+                  callback(); // continue whatever you want to do next (like sendRequest)
+              });
+          }, function(error) {
+              alert("Location access denied. Please enable location.");
+          });
+      } else {
+          alert("Geolocation not supported.");
+      }
+    }
+    function getReadableAddress(lat, lng, callback) {
+      const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`;
+      fetch(url)
+          .then(response => response.json())
+          .then(data => {
+              const readable = data.display_name || "Address not available";
+              console.log("Readable Address: ", readable);
+              callback(readable);  // ✅ PASS the address to the callback
+          })
+          .catch(error => {
+              console.error("Error getting address: ", error);
+              callback("Address not available");  // ✅ Pass fallback
+          });
+      }  
+     function startRadarEffect() {
+      if (userLat && userLng) {  // Make sure userLat and userLng are set
+          radarCircle = L.circle([userLat, userLng], {
+              color: 'blue',
+              fillColor: '#30f',
+              fillOpacity: 0.2,
+              radius: 500
+          }).addTo(map);
+  
+          radarAnimationInterval = setInterval(function() {
+              radarCircle.setRadius(radarCircle.getRadius() + 10);  // Increase radius to simulate radar effect
+          }, 100);  // Change interval as needed for animation effect
+      }
+    }
+    function sendRequest() {
+      if (!selectedIssue && !document.getElementById("otherIssue").value.trim()) {
+          alert("Please select an issue or write other issue!");
+          return;
+      }
+      // Get latest position from marker
+      const position = userMarker.getLatLng();
+      userLat = position.lat;
+      userLng = position.lng;
+      console.log("Sending request with coordinates:", userLat, userLng);
+      // Get readable address before emitting
+      getReadableAddress(userLat, userLng, function(address) {
+          userAddress = address;
+          console.log("✅ Final address to send:", userAddress);
+          console.log("Sending request with user_id:", userId);
+          // Now send the request only after we have the address
+          socket.emit("user_request", {
+              issue: selectedIssue || document.getElementById("otherIssue").value,
+              lat: userLat,
+              lng: userLng,
+              address: userAddress,
+              name: userName,
+              phone: userPhone,
+              user_id: userId
+          });
+          // Start radar effect
+          startRadarEffect();
+          alert("Your request has been sent to a nearby mechanic. Please wait for a response.");
+      });
+    }  
+    function stopRadarEffect() {
+    if (radarAnimationInterval) {
+        clearInterval(radarAnimationInterval);
+        radarAnimationInterval = null;
+    }
+    if (radarCircle) {
+        map.removeLayer(radarCircle);
+        radarCircle = null;
+    }}
+    socket.on("mechanic_accepted", (data) => {
+      stopRadarEffect();
+      console.log("Received data from server:", data); 
+      // Update user's service panel
+      document.getElementById("currentMechanic").innerText = data.mechanic_name;
+      document.getElementById("currentShop").innerText = data.shop_name;
+      document.getElementById("currentPhone").innerText = data.phone;
+      alert("Mechanic accepted your request!");
+      // Add mechanic marker and draw route
+      let mechanicLat = data.lat;
+      let mechanicLng = data.lng;
+      // Place mechanic marker
+      if (typeof mechanicMarker !== 'undefined' && mechanicMarker) {
+          map.removeLayer(mechanicMarker);
+      }
+      const mechanicIcon = L.icon({
+          iconUrl: 'https://cdn-icons-png.flaticon.com/512/685/685352.png',
+          iconSize: [40, 40],
+      });
+      mechanicMarker = L.marker([mechanicLat, mechanicLng], { icon: mechanicIcon })
+          .addTo(map)
+          .bindPopup('Mechanic')
+          .openPopup();
+      socket.emit("start-routing", {
+        user_id: userId,
+        mechanic_id: data.mechanic_id,
+        user_coords: [userLat, userLng],
+        mechanic_coords: [mechanicLat, mechanicLng]
+      });
+      // Draw route
+      if (typeof routingControl !== 'undefined' && routingControl) {
+          map.removeControl(routingControl);
+      }
+      routingControl = L.Routing.control({
+          waypoints: [
+            L.latLng(userLat, userLng),  
+            L.latLng(mechanicLat, mechanicLng)
+          ],
+          routeWhileDragging: false,
+          addWaypoints: false,
+          draggableWaypoints: false,
+          createMarker: function() { return null; } // no extra markers
+      }).addTo(map);
+    });
+    socket.on("mechanic_location_changed", function(data) {
+      if (mechanicMarker) {
+        mechanicMarker.setLatLng([data.lat, data.lng]);
+      } else {
+        mechanicMarker = L.marker([data.lat, data.lng]).addTo(map);
+      }
+    });    
+    function stopRoutingUser() {
+      if (routingControl) {
+        routingControl.spliceWaypoints(0, 2);
+          map.removeControl(routingControl);
+          routingControl= null;
+      }
+      if (mechanicMarker) {
+          map.removeLayer(mechanicMarker);
+          mechanicMarker = null;
+      }
+      console.log("User-side routing stopped.");
+  }
+  socket.on("stop-routing", (data) => {
+    console.log("🛑 stop-routing received with data:", data);
+    stopRoutingUser();
+  });  
+    document.addEventListener("DOMContentLoaded", () => {
+      const userToggleBtn = document.getElementById("userHistoryToggle");
+      const userHistoryPanel = document.getElementById("userHistoryPanel");
+      userToggleBtn.addEventListener("click", () => {
+          if (userHistoryPanel.style.display === "none" || userHistoryPanel.style.display === "") {
+              userHistoryPanel.style.display = "block";
+          } else {
+              userHistoryPanel.style.display = "none";
+          }
+      });
+  });
+  socket.on("job-finished", () => {
+    alert("🔔 Mechanic marked your work as completed. Click OK to confirm.");
+    stopRoutingUser();
+    const mechanicName = document.getElementById("currentMechanic").innerText;
+    const shopName = document.getElementById("currentShop").innerText;
+    const address = userAddress;
+    const payment = "Paid in Cash";
+  
+    const now = new Date();
+    const completedDate = now.toLocaleString();
+    const nextServiceDate = new Date(now);
+    nextServiceDate.setMonth(nextServiceDate.getMonth() + 3);
+    const nextService = nextServiceDate.toLocaleDateString();
+  
+    const li = document.createElement("li");
+    li.className = "history-entry";
+    li.innerHTML = `
+      <strong>Mechanic:</strong> ${mechanicName}<br>
+      <strong>Shop:</strong> ${shopName}<br>
+      <strong>Location:</strong> ${address}<br>
+      <strong>Payment:</strong> ${payment}<br>
+      <strong>Date:</strong> ${completedDate}<br>
+      <strong>Next Service:</strong> ${nextService}
+    `;
+    document.getElementById("userHistoryList").appendChild(li);
+    document.getElementById("currentMechanic").innerText = "--";
+    document.getElementById("currentShop").innerText = "--";
+    document.getElementById("currentPhone").innerText = "--";
+  });  
+  
+    const chatIcon = document.getElementById("chat-icon");
+        const chatBox = document.getElementById("chat-box-container");
+        let isDragging = false, offsetX, offsetY;
+        chatIcon.addEventListener("click", () => {
+            chatBox.style.display = (chatBox.style.display === "none") ? "block" : "none";
+        });
+        chatIcon.addEventListener("mousedown", (e) => {
+            isDragging = true;
+            offsetX = e.clientX - chatIcon.getBoundingClientRect().left;
+            offsetY = e.clientY - chatIcon.getBoundingClientRect().top;
+            chatIcon.style.cursor = "grabbing";
+        });
+        document.addEventListener("mousemove", (e) => {
+            if (!isDragging) return;
+            let x = e.clientX - offsetX;
+            let y = e.clientY - offsetY;
+            // Boundary check
+            x = Math.max(0, Math.min(window.innerWidth - 50, x));
+            y = Math.max(0, Math.min(window.innerHeight - 50, y));
+            chatIcon.style.left = x + "px";
+            chatIcon.style.top = y + "px";
+        });
+        document.addEventListener("mouseup", () => {
+            isDragging = false;
+            chatIcon.style.cursor = "grab";
+        });
+  </script>
+</body>
+</html>
